@@ -70,6 +70,14 @@ button{cursor:pointer}
 .tx-l span{display:block;color:var(--mu);font-size:.82rem;overflow-wrap:anywhere}
 textarea{min-height:90px;resize:vertical}
 #msg,#msg2,#msgA{min-height:1.2em;color:var(--gold);font-size:.88rem;margin:4px 0 0}
+h3{font-size:.95rem;margin:0 0 6px;font-weight:600;color:var(--mu)}
+.plangrid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))}
+.pf{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:6px}
+.pf span{flex:1;min-width:0}
+.pf input{width:120px;margin:0;text-align:right}
+.plansum{margin:16px 0 8px;flex-wrap:wrap}
+.left{font-size:1.05rem;margin-bottom:4px}.left b{font-size:1.3rem}.gold{color:var(--gold)}
+#planMsg{min-height:1.2em;color:var(--gold);margin:4px 0 12px}
 footer{color:var(--mu);font-size:.8rem;padding:26px 16px 34px;text-align:center}
 @media(prefers-reduced-motion:no-preference){.fill{transition:width .4s}}
 </style>
@@ -96,8 +104,8 @@ footer{color:var(--mu);font-size:.8rem;padding:26px 16px 34px;text-align:center}
         <select id="tType" onchange="setType()" aria-label="Type"><option value="expense">Expense</option><option value="income">Income</option></select>
         <input id="tDate" type="date" aria-label="Date">
       </div>
-      <input id="tAmt" type="number" inputmode="decimal" step="0.01" placeholder="Amount in GH₵" aria-label="Amount">
       <select id="tCat" aria-label="Category or income source"></select>
+      <input id="tAmt" type="number" inputmode="decimal" step="0.01" placeholder="Amount in GH₵" aria-label="Amount">
       <input id="tNote" placeholder="Note (optional)" aria-label="Note">
       <label class="chk" id="repWrap"><input type="checkbox" id="tRep"> Repeat every month</label>
       <button class="pri" id="tBtn" onclick="submitTx()">Add transaction</button>
@@ -128,6 +136,14 @@ footer{color:var(--mu);font-size:.8rem;padding:26px 16px 34px;text-align:center}
     </div>
   </div>
 </div>
+<div class="card" id="plan" style="margin-top:16px">
+  <h2>Plan ahead</h2>
+  <p class="mu" style="margin-top:0">Decide how to use your money before the month starts, then see how you do against it.</p>
+  <div class="mnav"><button class="ic" onclick="planShift(-1)" aria-label="Previous month">‹</button><span id="pName"></span><button class="ic" onclick="planShift(1)" aria-label="Next month">›</button></div>
+  <div class="seg"><button onclick="planFromActuals()">Use last month’s spending</button><button onclick="planAddRecs()">Add repeating items</button></div>
+  <p id="planMsg" role="status"></p>
+  <div id="planForm"></div><div id="planSum"></div><div id="planCmp"></div>
+</div>
 </main>
 <footer>Sika saves on this device. Sign in to keep a copy online too.</footer>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.js"></script>
@@ -144,7 +160,7 @@ const sum=(a,t)=>a.filter(x=>x.type===t).reduce((s,x)=>s+x.amount,0);
 const toast=(m,id)=>{$(id||'msg').textContent=m};
 let n=0;const uid=()=>Date.now()*100+(n++%100);
 const todayStr=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')};
-let S={tx:[],limits:{},goals:[],rec:[]};
+let S={tx:[],limits:{},goals:[],rec:[],plans:{}};
 try{const r=localStorage.getItem('sika');if(r){const d=JSON.parse(r);if(d&&Array.isArray(d.tx))S=Object.assign(S,d)}}catch(e){}
 const save=()=>{S.updated=Date.now();try{localStorage.setItem('sika',JSON.stringify(S))}catch(e){}render();queuePush()};
 let cur=key(todayStr()),editId=null,armed=false;
@@ -196,7 +212,7 @@ function importData(){
   if(!armed){armed=true;b.textContent='Tap again to replace all data';setTimeout(()=>{armed=false;b.textContent='Restore from text'},5000);return}
   armed=false;b.textContent='Restore from text';
   try{const d=JSON.parse($('bk').value);if(!d||!Array.isArray(d.tx))throw 0;
-    S={tx:d.tx,limits:d.limits||{},goals:d.goals||[],rec:d.rec||[]};save();toast('Backup restored.','msg2')}
+    S={tx:d.tx,limits:d.limits||{},goals:d.goals||[],rec:d.rec||[],plans:d.plans||{}};save();toast('Backup restored.','msg2')}
   catch(e){toast('That is not a valid backup. Paste the full backup text and try again.','msg2')}}
 
 function donut(items,total){
@@ -224,7 +240,7 @@ function render(){
   $('goals').innerHTML=S.goals.map(g=>{const p=Math.min(100,g.saved/g.target*100);
     return `<div class="gl"><div class="row" style="border:0;padding:0"><b>${esc(g.name)}</b><button class="sm" onclick="delGoal(${g.id})" aria-label="Remove goal">Remove</button></div><div class="bar"><div class="fill" style="width:${p}%"></div></div><div class="mu">${fmt(g.saved)} of ${fmt(g.target)} saved (${Math.round(p)}%)</div><div class="addrow"><input id="g${g.id}" type="number" inputmode="decimal" step="0.01" placeholder="Amount to add" aria-label="Amount to add"><button class="sm pri" onclick="addTo(${g.id})">Add</button></div></div>`}).join('')||'<p class="empty" style="margin-top:6px">No goals yet. Name something you are saving for.</p>';
   $('recs').innerHTML=S.rec.map(r=>`<div class="row"><div class="tx-l"><b>${esc(r.category)} ${fmt(r.amount)}</b><span>${r.type==='income'?'Income':'Expense'}, on day ${r.day} each month${r.note?': '+esc(r.note):''}</span></div><button class="sm" onclick="delRec(${r.id})">Stop</button></div>`).join('')||'<p class="empty">Nothing repeats yet. Tick Repeat every month when you add rent, salary or a data bundle.</p>';
-  $('list').innerHTML=m.map(t=>`<div class="row"><div class="tx-l"><b>${esc(t.category)}</b><span>${t.date}${t.recId?', monthly':''}${t.note?': '+esc(t.note):''}</span></div><div class="acts"><b class="${t.type==='income'?'pos':''}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</b><button class="sm" onclick="editTx(${t.id})">Edit</button><button class="sm" onclick="delTx(${t.id})" aria-label="Delete">✕</button></div></div>`).join('')||'<p class="empty">No transactions in this month.</p>'}
+  $('list').innerHTML=m.map(t=>`<div class="row"><div class="tx-l"><b>${esc(t.category)}</b><span>${t.date}${t.recId?', monthly':''}${t.note?': '+esc(t.note):''}</span></div><div class="acts"><b class="${t.type==='income'?'pos':''}">${t.type==='income'?'+':'-'}${fmt(t.amount)}</b><button class="sm" onclick="editTx(${t.id})">Edit</button><button class="sm" onclick="delTx(${t.id})" aria-label="Delete">✕</button></div></div>`).join('')||'<p class="empty">No transactions in this month.</p>';drawPlan(true)}
 
 
 const SB_URL='https://atmmpevbqldmfmyrweij.supabase.co',SB_KEY='sb_publishable_xfb8ZpSAoDzxFsB5LjP7gw_t_0DIFg3';
@@ -242,7 +258,7 @@ async function pull(first){
   try{const{data,error}=await sb.from('budget_data').select('data').eq('user_id',user.id).maybeSingle();
     if(error)throw error;
     const r=data&&data.data;
-    const has=r&&((r.tx&&r.tx.length)||(r.goals&&r.goals.length)||(r.rec&&r.rec.length)||Object.keys(r.limits||{}).length);
+    const has=r&&((r.tx&&r.tx.length)||(r.goals&&r.goals.length)||(r.rec&&r.rec.length)||Object.keys(r.limits||{}).length||(r.plans&&Object.keys(r.plans).length));
     if(!has){await push();return}
     if(first||(r.updated||0)>(S.updated||0)){adopt(r);setStat('Saved online.')}
     else if((S.updated||0)>(r.updated||0)){await push()}
@@ -270,6 +286,50 @@ if(sb){
     if(user){const f=justIn;justIn=false;setTimeout(()=>pull(f),0)}});
   document.addEventListener('visibilitychange',()=>{if(!document.hidden&&user)pull(false)})}
 drawAuth();
+
+let pm=(()=>{let[y,m]=key(todayStr()).split('-').map(Number);m++;if(m>12){m=1;y++}return y+'-'+String(m).padStart(2,'0')})();
+const fld=(id,label,v)=>`<label class="pf"><span>${esc(label)}</span><input id="${id}" type="number" inputmode="decimal" step="0.01" min="0" placeholder="0" value="${v?v:''}" oninput="planEdit()" aria-label="${esc(label)}"></label>`;
+const getPlan=()=>(S.plans&&S.plans[pm])||{inc:{},exp:{},save:0};
+const planMsg=m=>{$('planMsg').textContent=m};
+function planSave(){S.updated=Date.now();try{localStorage.setItem('sika',JSON.stringify(S))}catch(e){}queuePush()}
+function planShift(d){let[y,m]=pm.split('-').map(Number);m+=d;while(m>12){m-=12;y++}while(m<1){m+=12;y--}pm=y+'-'+String(m).padStart(2,'0');planMsg('');drawPlan()}
+function drawPlan(soft){
+  const a=document.activeElement;
+  if(soft&&a&&a.closest&&a.closest('#planForm')){planSummary();return}
+  const p=getPlan();
+  $('pName').textContent=monthName(pm);
+  $('planForm').innerHTML=`<div class="plangrid"><div><h3>Expected income</h3>${INC.map((c,i)=>fld('pi'+i,c,p.inc[c])).join('')}</div><div><h3>Planned spending</h3>${EXP.map((c,i)=>fld('pe'+i,c,p.exp[c])).join('')}</div></div><h3 style="margin-top:12px">Savings</h3>${fld('ps','Set aside to save',p.save)}`;
+  planSummary()}
+function planEdit(){
+  const p={inc:{},exp:{},save:0};
+  INC.forEach((c,i)=>{const v=parseFloat($('pi'+i).value);if(v>0)p.inc[c]=v});
+  EXP.forEach((c,i)=>{const v=parseFloat($('pe'+i).value);if(v>0)p.exp[c]=v});
+  p.save=Math.max(0,parseFloat($('ps').value)||0);
+  S.plans=S.plans||{};S.plans[pm]=p;planSave();planSummary()}
+function cmp(c,a,pl,isInc){const pc=a/pl*100,cls=isInc?'':pc>=100?'d':pc>=80?'w':'';
+  return `<div class="gl"><div class="row" style="border:0;padding:0"><span>${esc(c)}</span><span class="mu">${fmt(a)} of ${fmt(pl)}</span></div><div class="bar"><div class="fill ${cls}" style="width:${Math.min(pc,100)}%"></div></div></div>`}
+function planSummary(){
+  const p=getPlan(),tot=o=>Object.values(o).reduce((s,v)=>s+v,0);
+  const ti=tot(p.inc),te=tot(p.exp),ts=p.save||0,left=ti-te-ts;
+  const ok=Math.abs(left)<0.005,cls=ok?'pos':left>0?'gold':'neg';
+  $('planSum').innerHTML=`<div class="hr plansum"><div><span>Income</span><b class="pos">${fmt(ti)}</b></div><div><span>Spending</span><b>${fmt(te)}</b></div><div><span>Savings</span><b>${fmt(ts)}</b></div></div><div class="left ${cls}"><b>${fmt(Math.abs(left))}</b> ${ok?'Every cedi has a job.':left>0?'still to assign':'over your planned income'}</div>`;
+  const ai={},ae={};
+  S.tx.filter(t=>key(t.date)===pm).forEach(t=>{const o=t.type==='income'?ai:ae;o[t.category]=(o[t.category]||0)+t.amount});
+  const rows=[];
+  INC.forEach(c=>{if(p.inc[c])rows.push(cmp(c,ai[c]||0,p.inc[c],true))});
+  EXP.forEach(c=>{if(p.exp[c])rows.push(cmp(c,ae[c]||0,p.exp[c],false))});
+  $('planCmp').innerHTML=rows.length?`<h3 style="margin:14px 0 4px">Plan vs actual</h3>${rows.join('')}`:''}
+function planFromActuals(){
+  const[y,m]=pm.split('-').map(Number),d=new Date(y,m-2,1),k=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  const p={inc:{},exp:{},save:0};
+  S.tx.filter(t=>key(t.date)===k).forEach(t=>{const o=t.type==='income'?p.inc:p.exp;o[t.category]=Math.round(((o[t.category]||0)+t.amount)*100)/100});
+  if(!Object.keys(p.inc).length&&!Object.keys(p.exp).length)return planMsg('No transactions found in '+monthName(k)+'.');
+  S.plans=S.plans||{};S.plans[pm]=p;planSave();drawPlan();planMsg('Filled from '+monthName(k)+'. Change any number you like.')}
+function planAddRecs(){
+  if(!S.rec.length)return planMsg('You have no repeating items yet.');
+  const p=getPlan(),seen={inc:{},exp:{}};
+  S.rec.forEach(r=>{const o=r.type==='income'?'inc':'exp';p[o][r.category]=(seen[o][r.category]?p[o][r.category]:0)+r.amount;seen[o][r.category]=1});
+  S.plans=S.plans||{};S.plans[pm]=p;planSave();drawPlan();planMsg('Added your repeating items.')}
 $('lCat').innerHTML=EXP.map(c=>`<option>${c}</option>`).join('');
 setType();$('tDate').value=todayStr();
 if(applyRec())save();else render();
